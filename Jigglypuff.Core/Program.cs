@@ -7,6 +7,7 @@ using DSharpPlus.CommandsNext;
 using DSharpPlus.EventArgs;
 using DSharpPlus.Interactivity;
 using DSharpPlus.VoiceNext;
+using DSharpPlus.VoiceNext.Codec;
 using Jigglypuff.Core.Exceptions;
 using Newtonsoft.Json;
 
@@ -22,6 +23,19 @@ namespace Jigglypuff.Core
         public static async Task Main(string[] args)
         {
             Globals.BotSettings = JsonConvert.DeserializeObject<Settings>(File.ReadAllText(Path.Combine(Globals.AppPath, "config.json")));
+
+            try
+            {
+                if (Directory.Exists(Path.Combine(Globals.AppPath, "Queue")))
+                {
+                    Directory.Delete(Path.Combine(Globals.AppPath, "Queue"), true);
+                }
+
+            }
+            catch
+            {
+                // Consume "Directory not empty" error
+            }
 
             discord = new DiscordClient(new DiscordConfiguration
             {
@@ -48,7 +62,10 @@ namespace Jigglypuff.Core
             {
             });
 
-            voice = discord.UseVoiceNext();
+            voice = discord.UseVoiceNext(new VoiceNextConfiguration
+            {
+                VoiceApplication = VoiceApplication.Music
+            });
 
             discord.MessageCreated += Discord_MessageCreated;
 

@@ -16,17 +16,35 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="DSharpPlus" Version="4.0.0-beta-00405" />
-    <PackageReference Include="DSharpPlus.CommandsNext" Version="4.0.0-beta-00405" />
-    <PackageReference Include="DSharpPlus.Interactivity" Version="4.0.0-beta-00405" />
-    <PackageReference Include="DSharpPlus.VoiceNext" Version="4.0.0-beta-00405" />
-    <PackageReference Include="Google.Apis.YouTube.v3" Version="1.32.0.1079" />
-    <PackageReference Include="Newtonsoft.Json" Version="10.0.3" />
-    <PackageReference Include="YoutubeExplode" Version="4.0.0" />
+    <PackageReference Include="DSharpPlus" Version="4.0.0-beta-00456" />
+    <PackageReference Include="DSharpPlus.CommandsNext" Version="4.0.0-beta-00456" />
+    <PackageReference Include="DSharpPlus.Interactivity" Version="4.0.0-beta-00456" />
+    <PackageReference Include="DSharpPlus.VoiceNext" Version="4.0.0-beta-00456" />
+    <PackageReference Include="Google.Apis.YouTube.v3" Version="1.34.0.1226" />
+    <PackageReference Include="Newtonsoft.Json" Version="11.0.2" />
+    <PackageReference Include="VideoLibrary" Version="2.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="config.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="ffmpeg.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="ffplay.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="ffprobe.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="libopus.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="libsodium.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="youtube-dl.exe">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>

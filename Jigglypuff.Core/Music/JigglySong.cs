@@ -10,6 +10,7 @@ namespace Jigglypuff.Core.Music
             Youtube
         }
 
+        public string File { get; set; }
         public SongType Type { get; set; }
         public DiscordMember Queuer { get; set; }
         public string Title { get; set; }
