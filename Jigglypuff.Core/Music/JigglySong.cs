@@ -1,4 +1,5 @@
-﻿using DSharpPlus.Entities;
+﻿using System;
+using DSharpPlus.Entities;
 
 namespace Jigglypuff.Core.Music
 {
@@ -10,6 +11,7 @@ namespace Jigglypuff.Core.Music
             Youtube
         }
 
+        public Guid Guid { get; set; }
         public string File { get; set; }
         public SongType Type { get; set; }
         public DiscordMember Queuer { get; set; }

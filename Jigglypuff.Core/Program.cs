@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
 using DSharpPlus;
 using DSharpPlus.CommandsNext;
+using DSharpPlus.Entities;
 using DSharpPlus.EventArgs;
 using DSharpPlus.Interactivity;
 using DSharpPlus.VoiceNext;
@@ -68,10 +70,24 @@ namespace Jigglypuff.Core
             });
 
             discord.MessageCreated += Discord_MessageCreated;
+            AppDomain.CurrentDomain.ProcessExit += CurrentDomain_ProcessExit;
 
             await discord.ConnectAsync();
 
             await Task.Delay(-1);
+        }
+
+        private static void CurrentDomain_ProcessExit(object sender, EventArgs e)
+        {
+            if (discord == null)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<ulong, DiscordGuild> discordGuild in discord.Guilds)
+            {
+                discord.GetVoiceNext()?.GetConnection(discordGuild.Value)?.Disconnect();
+            }
         }
 
         private static async Task Commands_CommandErrored(CommandErrorEventArgs e)

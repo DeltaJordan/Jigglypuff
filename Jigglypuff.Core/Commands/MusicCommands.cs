@@ -31,9 +31,9 @@ namespace Jigglypuff.Core.Commands
     [Group("music"), Aliases("m")]
     public class MusicCommands : BaseCommandModule
     {
-        private static Dictionary<ulong, List<JigglySong>> guildQueues = new Dictionary<ulong, List<JigglySong>>();
+        public static readonly Dictionary<ulong, List<JigglySong>> GuildQueues = new Dictionary<ulong, List<JigglySong>>();
 
-        private static Dictionary<ulong, MusicStatus> guildMusicStatuses = new Dictionary<ulong, MusicStatus>();
+        public static readonly Dictionary<ulong, MusicStatus> GuildMusicStatuses = new Dictionary<ulong, MusicStatus>();
 
         [Command("join"), Aliases("j")]
         public async Task Join(CommandContext ctx)
@@ -70,11 +70,11 @@ namespace Jigglypuff.Core.Commands
 
             if (clearQueue)
             {
-                guildQueues[ctx.Guild.Id].Clear();
+                GuildQueues[ctx.Guild.Id].Clear();
             }
-            guildMusicStatuses[ctx.Guild.Id].Skip = true;
+            GuildMusicStatuses[ctx.Guild.Id].Skip = true;
             Thread.Sleep(500);
-            guildMusicStatuses.Remove(ctx.Guild.Id);
+            GuildMusicStatuses.Remove(ctx.Guild.Id);
             Directory.Delete(Path.Combine(Globals.AppPath, "Queue", ctx.Guild.Id.ToString()), true);
 
             vnc.Disconnect();
@@ -93,7 +93,7 @@ namespace Jigglypuff.Core.Commands
                     throw new OutputException($"Invalid input. Valid inputs: `One`, `All`, `None`.");
                 }
 
-                guildMusicStatuses[ctx.Guild.Id].Repeat = repeatType;
+                GuildMusicStatuses[ctx.Guild.Id].Repeat = repeatType;
 
                 switch (repeatType)
                 {
@@ -137,12 +137,33 @@ namespace Jigglypuff.Core.Commands
             if (!string.IsNullOrWhiteSpace(queryString))
             {
                 await this.Queue(ctx, queryString);
+                
+                if (!GuildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus musicStatus))
+                {
+                    GuildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus
+                    {
+                        Skip = false
+                    });
+
+                    if (ctx.Client.GetVoiceNext().GetConnection(ctx.Guild) != null)
+                    {
+                        PlayMusic(ctx);
+                    }
+                }
+                else
+                {
+                    if (!musicStatus.Skip && ctx.Client.GetVoiceNext().GetConnection(ctx.Guild) != null)
+                    {
+                        PlayMusic(ctx);
+                    }
+                }
+
                 return;
             }
 
-            if (!guildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus _))
+            if (!GuildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus _))
             {
-                guildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus {Skip = false});
+                GuildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus {Skip = false});
             }
 
             PlayMusic(ctx);
@@ -151,12 +172,17 @@ namespace Jigglypuff.Core.Commands
         [Command("skip"), Aliases("s"), Description("Skips the currently playing song.")]
         public async Task Skip(CommandContext ctx)
         {
-            guildMusicStatuses[ctx.Guild.Id].Skip = true;
+            GuildMusicStatuses[ctx.Guild.Id].Skip = true;
         }
 
         [Command("queueplaylist"), Aliases("qp"), Description("Enqueues the requested playlist. Note that at the moment this only retrieves the first 50 videos.")]
         public async Task QueuePlaylist(CommandContext ctx, string playlistUrl, [Description("Shuffle the playlist when adding to queue. \"true\" to enable.")] bool shuffle = false)
         {
+            if (ctx.Client.GetVoiceNext()?.GetConnection(ctx.Guild)?.Channel != null && ctx.Client.GetVoiceNext().GetConnection(ctx.Guild).Channel.Users.All(e => e.Id != ctx.User.Id))
+            {
+                throw new OutputException("You must join a voice channel to queue songs.");
+            }
+
             Uri playlistUri;
 
             try
@@ -203,10 +229,22 @@ namespace Jigglypuff.Core.Commands
                 playlistItemsListResponse.Items.Shuffle();
             }
 
-            int resultQueueCount = guildQueues.ContainsKey(ctx.Guild.Id) ? guildQueues[ctx.Guild.Id].Count + playlistItemsListResponse.Items.Count : playlistItemsListResponse.Items.Count;
+            int resultQueueCount = GuildQueues.ContainsKey(ctx.Guild.Id) ? GuildQueues[ctx.Guild.Id].Count + playlistItemsListResponse.Items.Count : playlistItemsListResponse.Items.Count;
 
             await ctx.RespondAsync($"Queuing {playlistItemsListResponse.Items.Count} songs, please be patient if this is the first items to be added to queue. " +
                                     "(If you try to play music and nothing happens most likely the first song is still pending)");
+
+            if (!GuildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus musicStatus))
+            {
+                GuildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus
+                {
+                    Skip = false
+                });
+            }
+
+            while (GuildMusicStatuses[ctx.Guild.Id].Queuing) {}
+
+            GuildMusicStatuses[ctx.Guild.Id].Queuing = true;
 
             foreach (PlaylistItem playlistItem in playlistItemsListResponse.Items)
             {
@@ -224,9 +262,9 @@ namespace Jigglypuff.Core.Commands
                     return;
                 }
 
-                if (!guildQueues.ContainsKey(ctx.Guild.Id))
+                if (!GuildQueues.ContainsKey(ctx.Guild.Id))
                 {
-                    guildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
+                    GuildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
                 }
 
                 Video parsedVideo = videoListResponse.Items.First();
@@ -236,8 +274,24 @@ namespace Jigglypuff.Core.Commands
                     await ctx.RespondAsync("This video is too long, please try to find something shorter than 15 minutes.");
                 }
 
-                AddSong(parsedVideo.Snippet.Title, parsedVideo.Id, await DownloadHelper.DownloadFromYouTube(ctx, $"https://www.youtube.com/watch?v={id}"), parsedVideo.Snippet.ChannelTitle, JigglySong.SongType.Youtube, ctx.Member);
+                Guid guid = Guid.NewGuid();
+
+                AddSong(guid, parsedVideo.Snippet.Title, parsedVideo.Id, parsedVideo.Snippet.ChannelTitle, JigglySong.SongType.Youtube, ctx.Member);
+
+                if (!DownloadHelper.GuildMusicTasks.ContainsKey(ctx.Guild.Id))
+                {
+                    DownloadHelper.GuildMusicTasks.Add(ctx.Guild.Id, new List<(Guid guid, Func<string> downloadTask)>());
+                }
+
+                DownloadHelper.GuildMusicTasks[ctx.Guild.Id].Add((guid, () => DownloadHelper.DownloadFromYouTube(ctx, $"https://www.youtube.com/watch?v={id}")));
+
+                if (!DownloadHelper.IsDownloadLoopRunning)
+                {
+                    new Thread(() => DownloadHelper.DownloadQueue(ctx.Guild.Id)).Start();
+                }
             }
+
+            GuildMusicStatuses[ctx.Guild.Id].Queuing = false;
 
             DiscordEmbedBuilder confirmationBuilder = new DiscordEmbedBuilder
             {
@@ -253,31 +307,46 @@ namespace Jigglypuff.Core.Commands
         {
             if (string.IsNullOrWhiteSpace(queryString))
             {
-                if (!guildQueues.TryGetValue(ctx.Guild.Id, out List<JigglySong> resultSongs))
+                if (!GuildQueues.TryGetValue(ctx.Guild.Id, out List<JigglySong> resultSongs))
                 {
                     await ctx.RespondAsync("There is nothing currently queued.");
                     return;
                 }
 
-                DiscordEmbedBuilder queueBuilder = new DiscordEmbedBuilder
+                for (int i = 0; i < resultSongs.Count; i += 5)
                 {
-                    Title = "Current Queue",
-                    Color = DiscordColor.Aquamarine
-                };
 
-                string tracks = string.Empty;
+                    DiscordEmbedBuilder queueBuilder = new DiscordEmbedBuilder
+                    {
+                        Title = $"Current Queue {i + 1}-{i + 5}",
+                        Color = DiscordColor.Aquamarine
+                    };
 
-                for (int i = 0; i < resultSongs.Count; i++)
-                {
-                    JigglySong resultSong = resultSongs[i];
+                    string tracks = string.Empty;
 
-                    tracks += $"{i + 1}: [**{resultSong.Title}** by **{resultSong.Artist}**](https://www.youtube.com/watch?v={resultSong.Id})";
+                    for (int j = i; j < i + 5; j++)
+                    {
+                        if (j >= resultSongs.Count)
+                        {
+                            break;
+                        }
+
+                        JigglySong resultSong = resultSongs[j];
+
+                        tracks += $"{j + 1}: [**{resultSong.Title}** by **{resultSong.Artist}**](https://www.youtube.com/watch?v={resultSong.Id})\n";
+                    }
+
+                    queueBuilder.Description = tracks;
+
+                    await ctx.RespondAsync(string.Empty, false, queueBuilder.Build());
                 }
 
-                queueBuilder.Description = tracks;
-
-                await ctx.RespondAsync(string.Empty, false, queueBuilder.Build());
                 return;
+            }
+
+            if (ctx.Client.GetVoiceNext()?.GetConnection(ctx.Guild)?.Channel != null && ctx.Client.GetVoiceNext().GetConnection(ctx.Guild).Channel.Users.All(e => e.Id != ctx.User.Id))
+            {
+                throw new OutputException("You must join a voice channel to queue songs.");
             }
 
             YouTubeService youtubeService = new YouTubeService(new BaseClientService.Initializer
@@ -290,7 +359,7 @@ namespace Jigglypuff.Core.Commands
             {
                 Uri uri = new Uri(queryString);
 
-                if (uri.Host != "youtu.be" || !uri.Host.Contains("youtube"))
+                if (uri.Host != "youtu.be" && !uri.Host.ToLower().Contains("youtube"))
                 {
                     throw new ArgumentException();
                 }
@@ -311,9 +380,9 @@ namespace Jigglypuff.Core.Commands
                     return;
                 }
 
-                if (!guildQueues.ContainsKey(ctx.Guild.Id))
+                if (!GuildQueues.ContainsKey(ctx.Guild.Id))
                 {
-                    guildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
+                    GuildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
                 }
 
                 Video parsedVideo = videoListResponse.Items.First();
@@ -323,11 +392,25 @@ namespace Jigglypuff.Core.Commands
                     await ctx.RespondAsync("This video is too long, please try to find something shorter than 15 minutes.");
                 }
 
-                AddSong(parsedVideo.Snippet.Title, parsedVideo.Id, await DownloadHelper.DownloadFromYouTube(ctx, queryString), parsedVideo.Snippet.ChannelTitle, JigglySong.SongType.Youtube, ctx.Member);
+                Guid guid = Guid.NewGuid();
+
+                AddSong(guid, parsedVideo.Snippet.Title, parsedVideo.Id, parsedVideo.Snippet.ChannelTitle, JigglySong.SongType.Youtube, ctx.Member);
+                
+                if (!DownloadHelper.GuildMusicTasks.ContainsKey(ctx.Guild.Id))
+                {
+                    DownloadHelper.GuildMusicTasks.Add(ctx.Guild.Id, new List<(Guid guid, Func<string> downloadTask)>());
+                }
+
+                DownloadHelper.GuildMusicTasks[ctx.Guild.Id].Add((guid, () => DownloadHelper.DownloadFromYouTube(ctx, queryString)));
+
+                if (!DownloadHelper.IsDownloadLoopRunning)
+                {
+                    new Thread(() => DownloadHelper.DownloadQueue(ctx.Guild.Id)).Start();
+                }
 
                 DiscordEmbedBuilder confirmationBuilder = new DiscordEmbedBuilder
                 {
-                    Description = $"**✅ Successfully added [{parsedVideo.Snippet.Title}](https://www.youtube.com/watch?v={parsedVideo.Id}) to queue position {guildQueues[ctx.Guild.Id].Count}**"
+                    Description = $"**✅ Successfully added [{parsedVideo.Snippet.Title}](https://www.youtube.com/watch?v={parsedVideo.Id}) to queue position {GuildQueues[ctx.Guild.Id].Count}**"
                 };
 
                 await ctx.RespondAsync(null, false, confirmationBuilder.Build());
@@ -396,7 +479,7 @@ namespace Jigglypuff.Core.Commands
 
                 if (msgContext == null)
                 {
-                    await ctx.RespondAsync($"🖋*Jigglypuff wrote on {ctx.User.Mention}'s face!*🖋\nMaybe they should have picked a song...");
+                    await ctx.RespondAsync($"🖍*Jigglypuff wrote on {ctx.User.Mention}'s face!*🖍\nMaybe they should have picked a song...");
                     await resultsMessage.DeleteAsync();
                     return;
                 }
@@ -410,45 +493,47 @@ namespace Jigglypuff.Core.Commands
                         await msgContext.Message.DeleteAsync();
                     }
 
-                    if (!guildQueues.ContainsKey(ctx.Guild.Id))
+                    if (!GuildQueues.ContainsKey(ctx.Guild.Id))
                     {
-                        guildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
+                        GuildQueues.Add(ctx.Guild.Id, new List<JigglySong>());
                     }
 
                     JigglySong selectedSong = videos[result];
 
                     DiscordEmbedBuilder confirmationBuilder = new DiscordEmbedBuilder
                     {
-                        Description = $"**✅ Successfully added [{videos[result].Title}](https://www.youtube.com/watch?v={videos[result].Id}) to queue position {guildQueues[ctx.Guild.Id].Count + 1}**"
+                        Description = $"**✅ Successfully added [{videos[result].Title}](https://www.youtube.com/watch?v={videos[result].Id}) to queue position {GuildQueues[ctx.Guild.Id].Count + 1}**"
                     };
 
-                    if (guildQueues[ctx.Guild.Id].Count == 0)
+                    if (GuildQueues[ctx.Guild.Id].Count == 0)
                     {
                         confirmationBuilder.Description += "\nPlease be patient; it takes a bit for the first song to cache.";
                     }
 
                     await ctx.RespondAsync(string.Empty, false, confirmationBuilder.Build());
 
-                    AddSong(selectedSong.Title, selectedSong.Id, await DownloadHelper.DownloadFromYouTube(ctx, $"https://www.youtube.com/watch?v={videos[result].Id}"), selectedSong.Artist, selectedSong.Type, selectedSong.Queuer);
-                    
-                    if (!guildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus musicStatus))
+                    if (!GuildMusicStatuses.TryGetValue(ctx.Guild.Id, out MusicStatus musicStatus))
                     {
-                        guildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus
+                        GuildMusicStatuses.Add(ctx.Guild.Id, new MusicStatus
                         {
                             Skip = false
                         });
-
-                        if (ctx.Client.GetVoiceNext().GetConnection(ctx.Guild) != null)
-                        {
-                            PlayMusic(ctx);
-                        }
                     }
-                    else
+
+                    Guid guid = Guid.NewGuid();
+
+                    AddSong(guid, selectedSong.Title, selectedSong.Id, selectedSong.Artist, selectedSong.Type, selectedSong.Queuer);
+
+                    if (!DownloadHelper.GuildMusicTasks.ContainsKey(ctx.Guild.Id))
                     {
-                        if (!musicStatus.Skip && ctx.Client.GetVoiceNext().GetConnection(ctx.Guild) != null)
-                        {
-                            PlayMusic(ctx);
-                        }
+                        DownloadHelper.GuildMusicTasks.Add(ctx.Guild.Id, new List<(Guid guid, Func<string> downloadTask)>());
+                    }
+
+                    DownloadHelper.GuildMusicTasks[ctx.Guild.Id].Add((guid, () => DownloadHelper.DownloadFromYouTube(ctx, $"https://www.youtube.com/watch?v={videos[result].Id}")));
+
+                    if (!DownloadHelper.IsDownloadLoopRunning)
+                    {
+                        new Thread(() => DownloadHelper.DownloadQueue(ctx.Guild.Id)).Start();
                     }
                 }
                 else
@@ -463,13 +548,14 @@ namespace Jigglypuff.Core.Commands
             }
         }
 
-        private static void AddSong(string title, string id, string file, string artist, JigglySong.SongType type, DiscordMember member)
+        private static void AddSong(Guid guid, string title, string id, string artist, JigglySong.SongType type, DiscordMember member)
         {
-            guildQueues[member.Guild.Id].Add(new JigglySong
+            GuildQueues[member.Guild.Id].Add(new JigglySong
             {
+                Guid = guid,
                 Title = title,
                 Id = id,
-                File = file,
+                File = null,
                 Artist = artist,
                 Type = JigglySong.SongType.Youtube,
                 Queuer = member
@@ -483,17 +569,17 @@ namespace Jigglypuff.Core.Commands
 
         private static async Task PlaySong(CommandContext ctx)
         {
-            if (guildMusicStatuses[ctx.Guild.Id].Playing)
+            if (GuildMusicStatuses[ctx.Guild.Id].Playing)
             {
                 return;
             }
             
-            if (guildQueues[ctx.Guild.Id].Count == 0)
+            if (GuildQueues[ctx.Guild.Id].Count == 0)
             {
                 throw new OutputException("No songs in queue! If you queued a song and this message shows, either it is still being locally queued or it silently failed to be retrieved.");
             }
 
-            guildMusicStatuses[ctx.Guild.Id].Playing = true;
+            GuildMusicStatuses[ctx.Guild.Id].Playing = true;
 
             while (true)
             {
@@ -501,22 +587,39 @@ namespace Jigglypuff.Core.Commands
 
                 VoiceNextConnection vnc = vnext.GetConnection(ctx.Guild);
 
-                if (vnc == null || !guildQueues[ctx.Guild.Id].Any())
+                if (vnc == null || !GuildQueues[ctx.Guild.Id].Any())
                 {
                     break;
                 }
 
+                if (GuildQueues[ctx.Guild.Id].First().File == null)
+                {
+                    await ctx.RespondAsync("The next song is queuing, please wait...");
+                    while (GuildQueues[ctx.Guild.Id].First().File == null)
+                    {
+                    }
+
+                    if (GuildQueues[ctx.Guild.Id].First().File == "error")
+                    {
+                        await ctx.RespondAsync($"Failed to play **{GuildQueues[ctx.Guild.Id].First().Title}** by **{GuildQueues[ctx.Guild.Id].First().Artist}**, " +
+                                               $"queued by {GuildQueues[ctx.Guild.Id].First().Queuer.Mention}");
+                        GuildQueues[ctx.Guild.Id].RemoveAt(0);
+                        await PlaySong(ctx);
+                        return;
+                    }
+                }
+
                 DiscordEmbedBuilder nowplayingBuilder = new DiscordEmbedBuilder
                 {
-                    Description = $"🎶 Now playing [{guildQueues[ctx.Guild.Id].First().Title}](https://www.youtube.com/watch?v={guildQueues[ctx.Guild.Id].First().Id}) 🎶\n\n" +
-                                  $"[{guildQueues[ctx.Guild.Id].First().Queuer.Mention}]{(guildMusicStatuses[ctx.Guild.Id].Repeat == MusicStatus.RepeatType.None ? "" : " [🔁]")}"
+                    Description = $"🎶 Now playing [{GuildQueues[ctx.Guild.Id].First().Title}](https://www.youtube.com/watch?v={GuildQueues[ctx.Guild.Id].First().Id}) 🎶\n\n" +
+                                  $"[{GuildQueues[ctx.Guild.Id].First().Queuer.Mention}]{(GuildMusicStatuses[ctx.Guild.Id].Repeat == MusicStatus.RepeatType.None ? "" : " [🔁]")}"
                 };
 
-                guildMusicStatuses[ctx.Guild.Id].Skip = false;
+                GuildMusicStatuses[ctx.Guild.Id].Skip = false;
 
                 await ctx.RespondAsync(null, false, nowplayingBuilder.Build());
 
-                string songFile = guildQueues[ctx.Guild.Id].First().File;
+                string songFile = GuildQueues[ctx.Guild.Id].First().File;
 
                 ProcessStartInfo startInfo = new ProcessStartInfo
                 {
@@ -535,7 +638,7 @@ namespace Jigglypuff.Core.Commands
                 byte[] buff = new byte[3840]; // buffer to hold the PCM data
                 while (await ffout.ReadAsync(buff, 0, buff.Length) > 0)
                 {
-                    if (guildMusicStatuses[ctx.Guild.Id].Skip)
+                    if (GuildMusicStatuses[ctx.Guild.Id].Skip)
                     {
                         break;
                     }
@@ -550,9 +653,20 @@ namespace Jigglypuff.Core.Commands
                     ffout.Flush();
                     ffout.Dispose();
                     ffmpeg.Dispose();
-                    if (guildMusicStatuses[ctx.Guild.Id].Repeat == MusicStatus.RepeatType.None)
+                    if (GuildMusicStatuses[ctx.Guild.Id].Repeat == MusicStatus.RepeatType.None)
                     {
-                        File.Delete(songFile);
+                        while (true)
+                        {
+                            try
+                            {
+                                File.Delete(songFile);
+                                break;
+                            }
+                            catch
+                            {
+                                // Wait for processes to release file.
+                            }
+                        }
                     }
                 }
                 catch
@@ -562,30 +676,32 @@ namespace Jigglypuff.Core.Commands
 
                 await vnc.SendSpeakingAsync(false);
 
-                switch (guildMusicStatuses[ctx.Guild.Id].Repeat)
+                switch (GuildMusicStatuses[ctx.Guild.Id].Repeat)
                 {
                     case MusicStatus.RepeatType.None:
-                        guildQueues[ctx.Guild.Id].RemoveAt(0);
+                        GuildQueues[ctx.Guild.Id].RemoveAt(0);
                         break;
                     case MusicStatus.RepeatType.All:
-                        JigglySong jigglySong = guildQueues[ctx.Guild.Id][0];
-                        guildQueues[ctx.Guild.Id].Add(jigglySong);
-                        guildQueues[ctx.Guild.Id].RemoveAt(0);
+                        JigglySong jigglySong = GuildQueues[ctx.Guild.Id][0];
+                        GuildQueues[ctx.Guild.Id].Add(jigglySong);
+                        GuildQueues[ctx.Guild.Id].RemoveAt(0);
                         break;
                     case MusicStatus.RepeatType.One:
                         // The Song is still number one in queue ;D
                         break;
                     default:
-                        guildQueues[ctx.Guild.Id].RemoveAt(0);
+                        GuildQueues[ctx.Guild.Id].RemoveAt(0);
                         break;
                 }
 
-                guildMusicStatuses[ctx.Guild.Id].Skip = false;
+                GuildMusicStatuses[ctx.Guild.Id].Skip = false;
             }
 
             ctx.Client.GetVoiceNext().GetConnection(ctx.Guild)?.Disconnect();
 
-            guildMusicStatuses[ctx.Guild.Id].Playing = false;
+            Directory.Delete(Path.Combine(Globals.AppPath, "Queue", ctx.Guild.Id.ToString()), true);
+
+            GuildMusicStatuses[ctx.Guild.Id].Playing = false;
         }
     }
 }
